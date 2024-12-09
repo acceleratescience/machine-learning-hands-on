@@ -34,6 +34,7 @@
   <p align="center">
     A hands-on workshop for machine learning with Python.
     <br />
+    <br />
     <a href="https://docs.science.ai.cam.ac.uk/machine-learning-hands-on/"><strong>Check out the projects »</strong></a>
     <br />
     <br />
