@@ -1,0 +1,126 @@
+name: Deploy MkDocs to Documentation Repo
+
+on:
+  push:
+    branches:
+      - main
+  repository_dispatch:
+    types: [rebuild_docs]
+
+env:
+  PYTHON_VERSION: '3.x'
+  MKDOCS_SITE_DIR: 'site'
+  DOCS_BRANCH: 'gh-pages'
+  DOCS_SUBDIR: 'machine-learning-hands-on
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install MkDocs and dependencies
+        run: |
+          pip install mkdocs mkdocs-material mkdocstrings mkdocs-jupyter
+
+      - name: Build the MkDocs site
+        run: mkdocs build
+
+      - name: Generate GitHub App token
+        id: generate_token
+        uses: tibdex/github-app-token@v1
+        with:
+          app_id: ${{ secrets.APP_ID }}
+          private_key: ${{ secrets.APP_PRIVATE_KEY }}
+          installation_id: ${{ secrets.INSTALLATION_ID }}
+
+      - name: Clone the Documentation Repo
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git clone --branch ${{ env.DOCS_BRANCH }} https://x-access-token:${{ steps.generate_token.outputs.token }}@github.com/acceleratescience/resource-hub.git temp_docs
+
+      # - name: Deploy to Documentation Repo
+      #   run: |
+      #     # Ensure the target directory exists
+      #     mkdir -p temp_docs/${{ env.DOCS_SUBDIR }}
+          
+      #     # Sync the built site to the target directory
+      #     rsync -av --delete ${{ env.MKDOCS_SITE_DIR }}/ temp_docs/${{ env.DOCS_SUBDIR }}/
+          
+      #     # Commit and push changes
+      #     cd temp_docs
+      #     git add .
+      #     git diff-index --quiet HEAD || (git stash && git pull --rebase origin ${{ env.DOCS_BRANCH }} && git stash pop)
+      #     git add .
+      #     git diff-index --quiet HEAD || git commit -m "Update ${{ env.DOCS_SUBDIR }} workshops"
+      #     git push origin ${{ env.DOCS_BRANCH }}
+
+      - name: Deploy to Documentation Repo
+        run: |
+          # Ensure the target directory exists
+          mkdir -p temp_docs/${{ env.DOCS_SUBDIR }}
+          
+          # Sync the built site to the target directory
+          rsync -av --delete ${{ env.MKDOCS_SITE_DIR }}/ temp_docs/${{ env.DOCS_SUBDIR }}/
+          
+          # Commit and push changes
+          cd temp_docs
+          git add .
+          
+          # Try to pull and push multiple times
+          max_attempts=5
+          attempt=1
+          while [ $attempt -le $max_attempts ]; do
+            echo "Attempt $attempt of $max_attempts"
+            
+            # Stash any changes
+            git stash
+            
+            # Pull with rebase
+            if git pull --rebase origin ${{ env.DOCS_BRANCH }}; then
+              # If pull successful, apply stashed changes
+              git stash pop
+            else
+              echo "Pull failed, retrying..."
+              git stash drop
+              attempt=$((attempt+1))
+              sleep 5
+              continue
+            fi
+            
+            # Check for changes
+            if git diff-index --quiet HEAD; then
+              echo "No changes to commit"
+              exit 0
+            fi
+            
+            # Commit changes
+            git add .
+            git commit -m "Update ${{ env.DOCS_SUBDIR }} resource-hub"
+            
+            # Try to push
+            if git push origin ${{ env.DOCS_BRANCH }}; then
+              echo "Push successful"
+              exit 0
+            else
+              echo "Push failed, retrying..."
+              attempt=$((attempt+1))
+              sleep 5
+            fi
+          done
+          
+          echo "Failed to push after $max_attempts attempts"
+          exit 1
+
+      - name: Clean up
+        if: always()
+        run: |
+          rm -rf temp_docs
